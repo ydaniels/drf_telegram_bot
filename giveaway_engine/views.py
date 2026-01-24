@@ -34,6 +34,8 @@ class TelegramWebhookView(APIView):
         text = message.get('text', '').strip()
         photo = message.get('photo')
 
+        contact = message.get('contact')
+
         # 1. Get or Create TelegramUser
         user, created = TelegramUser.objects.get_or_create(
             bot=bot,
@@ -49,6 +51,16 @@ class TelegramWebhookView(APIView):
                 user.username = username
                 user.first_name = first_name
                 user.save()
+        
+        # Update Phone if provided
+        if contact:
+            phone_number = contact.get('phone_number')
+            if phone_number:
+                user.phone_number = phone_number
+                user.save()
+                self.handle_contact_update(bot, user, chat_id)
+                # Return immediately after handling contact to avoid double processing
+                return Response(status=status.HTTP_200_OK)
 
         # 2. Logic Flow
         
@@ -56,8 +68,8 @@ class TelegramWebhookView(APIView):
         if text == '/start':
             self.handle_start(bot, chat_id, first_name)
             
-        # Commands like /claim_123
-        elif text.startswith('/claim_'):
+        # Commands like /claim_123 OR just 123
+        elif text.startswith('/claim_') or text.isdigit():
             self.handle_claim(bot, user, chat_id, text)
             
         # Scenario C (Part 2): Receiving Proof (Photo or Text)
@@ -91,7 +103,7 @@ class TelegramWebhookView(APIView):
                     msg += " (Instant)"
                 elif g.requirement_type == 'manual_approval':
                     msg += " (Requires Proof)"
-                msg += f" - /claim_{g.id}\n\n"
+                msg += f" - Reply {g.id}\n\n"
         else:
             msg += "No active giveaways at the moment."
             
@@ -99,22 +111,94 @@ class TelegramWebhookView(APIView):
 
     def handle_claim(self, bot, user, chat_id, text):
         try:
-            giveaway_id = int(text.split('_')[1])
+            if text.startswith('/claim_'):
+                giveaway_id = int(text.split('_')[1])
+            else:
+                giveaway_id = int(text)
+            
             giveaway = Giveaway.objects.get(id=giveaway_id, bot=bot, is_active=True)
         except (IndexError, ValueError, Giveaway.DoesNotExist):
             send_telegram_message(bot.token, chat_id, "Giveaway not found or inactive.")
             return
 
-        # Scenario B (Standard)
-        if giveaway.giveaway_type == 'standard' and giveaway.requirement_type == 'none':
-            send_telegram_message(bot.token, chat_id, giveaway.static_content)
-            GiveawayAttempt.objects.create(
+        # Check Questionnaire Requirement
+        if giveaway.requirement_type == 'questionnaire':
+             # Check if all questions are answered
+             questions = giveaway.questions.all().order_by('order')
+             if not questions.exists():
+                 # No questions? Fulfill immediately.
+                 self.fulfill_giveaway(bot, user, chat_id, giveaway)
+                 return
+
+             # Find first unanswered user question
+             from .models import UserAnswer # Import here to avoid circular
+             
+             # Get all answer texts for this user + giveaway
+             # We can't filter UserAnswer by giveaway directly easily unless we join through Question.
+             answered_q_ids = UserAnswer.objects.filter(
+                 user=user, 
+                 question__giveaway=giveaway
+             ).values_list('question_id', flat=True)
+
+             next_q = None
+             for q in questions:
+                 if q.id not in answered_q_ids:
+                     next_q = q
+                     break
+            
+             if next_q:
+                 # Ask this question
+                 cache_key = f"claim_intent_{chat_id}"
+                 cache.set(cache_key, giveaway.id, timeout=3600)  # 1 hour to answer
+                 # Also store which question we are asking
+                 cache.set(f"current_q_{chat_id}", next_q.id, timeout=3600)
+                 
+                 send_telegram_message(bot.token, chat_id, f"📝 Question: {next_q.text}")
+                 return
+             else:
+                 # All answered
+                 self.fulfill_giveaway(bot, user, chat_id, giveaway)
+                 return
+
+        # Check Phone Number Requirement First
+        if giveaway.requirement_type == 'phone_number':
+            if not user.phone_number:
+                # Store intent
+                cache_key = f"claim_intent_{chat_id}"
+                cache.set(cache_key, giveaway.id, timeout=600)
+                
+                # Ask for phone
+                keyboard = {
+                    "keyboard": [[{
+                        "text": "📱 Share Phone Number",
+                        "request_contact": True
+                    }]],
+                    "one_time_keyboard": True,
+                    "resize_keyboard": True
+                }
+                send_telegram_message(
+                    bot.token, 
+                    chat_id, 
+                    f"⚠️ This giveaway requires a mobile number to minimize spam.\nPlease tap the button below to verify your number.",
+                    reply_markup=keyboard
+                )
+                return
+            # If phone exists, proceed to fulfillment (Scenario B logic mostly)
+        
+        # FULFILLMENT Logic (Refactored)
+        self.fulfill_giveaway(bot, user, chat_id, giveaway)
+
+    def fulfill_giveaway(self, bot, user, chat_id, giveaway):
+        # Scenario B (Standard + None/Phone/Questionnaire)
+        if giveaway.giveaway_type == 'standard':
+             send_telegram_message(bot.token, chat_id, giveaway.static_content)
+             GiveawayAttempt.objects.create(
                 user=user,
                 giveaway=giveaway,
                 status='approved'
-            )
-        
-        # Scenario C (Unique + Manual Approval)
+             )
+
+        # Scenario C (Manual Proof)
         elif giveaway.requirement_type == 'manual_approval':
             # Store intent in cache for 10 minutes
             cache_key = f"claim_intent_{chat_id}"
@@ -122,26 +206,92 @@ class TelegramWebhookView(APIView):
             
             send_telegram_message(bot.token, chat_id, "Please send your proof (screenshot/text) now.")
             
+        # Unique + Automated (Phone or Questionnaire or None)
+        elif giveaway.giveaway_type == 'unique':
+                 item = GiveawayItem.objects.filter(giveaway=giveaway, is_used=False).first()
+                 if item:
+                    item.is_used = True
+                    item.claimed_by = user
+                    item.save()
+                    
+                    msg = f"✅ Verified! Here is your code:\n{item.content}"
+                    
+                    # Check for template
+                    if giveaway.approval_template:
+                        try:
+                            msg = giveaway.approval_template.content.format(
+                                content=item.content,
+                                name=user.first_name or "Friend"
+                            )
+                        except:
+                            pass
+
+                    send_telegram_message(bot.token, chat_id, msg)
+                    
+                    GiveawayAttempt.objects.create(
+                        user=user,
+                        giveaway=giveaway,
+                        status='approved'
+                    )
+                 else:
+                     send_telegram_message(bot.token, chat_id, "⚠️ Sorry, we are out of stock right now!")
+
         else:
-            # Handle other combinations if needed
             send_telegram_message(bot.token, chat_id, "This giveaway configuration is not fully supported yet.")
+
+    def handle_contact_update(self, bot, user, chat_id):
+        # Remove keyboard
+        remove_kb = {"remove_keyboard": True}
+        send_telegram_message(bot.token, chat_id, "✅ Phone Number Verified!", reply_markup=remove_kb)
+        
+        # Check for pending claim
+        cache_key = f"claim_intent_{chat_id}"
+        giveaway_id = cache.get(cache_key)
+        
+        if giveaway_id:
+            try:
+                giveaway = Giveaway.objects.get(id=giveaway_id)
+                # Verify requirement is actually phone number (security check)
+                if giveaway.requirement_type == 'phone_number':
+                    self.fulfill_giveaway(bot, user, chat_id, giveaway)
+                    cache.delete(cache_key)
+            except Giveaway.DoesNotExist:
+                pass
 
     def handle_proof(self, bot, user, chat_id, message):
         cache_key = f"claim_intent_{chat_id}"
         giveaway_id = cache.get(cache_key)
         
         if not giveaway_id:
-            # User sent a message/photo but no claim pending
-            # Maybe send a generic help? Or ignore.
-            return
+             return
             
         # Get the giveaway
         try:
             giveaway = Giveaway.objects.get(id=giveaway_id)
         except Giveaway.DoesNotExist:
-            return # Should not happen usually
+            return 
 
-        # Extract Proof
+        # QUESTIONNAIRE LOGIC
+        if giveaway.requirement_type == 'questionnaire':
+             # We are expecting an answer
+             current_q_id = cache.get(f"current_q_{chat_id}")
+             if current_q_id and 'text' in message:
+                 from .models import Questionnaire, UserAnswer
+                 try:
+                     question = Questionnaire.objects.get(id=current_q_id)
+                     # Save Answer
+                     UserAnswer.objects.create(
+                         user=user, 
+                         question=question,
+                         answer=message['text']
+                     )
+                     # Loop back to check for next question
+                     self.handle_claim(bot, user, chat_id, str(giveaway.id))
+                     return 
+                 except Questionnaire.DoesNotExist:
+                     pass
+        
+        # Extract Proof (Manual Approval)
         proof = ""
         if 'photo' in message:
             # Get the largest photo file_id
@@ -149,15 +299,16 @@ class TelegramWebhookView(APIView):
         elif 'text' in message:
             proof = message['text']
             
-        # Create Attempt
-        GiveawayAttempt.objects.create(
-            user=user,
-            giveaway=giveaway,
-            status='pending',
-            user_proof=proof
-        )
-        
-        # Clear cache
-        cache.delete(cache_key)
-        
-        send_telegram_message(bot.token, chat_id, "Proof received! An admin will verify shortly.")
+        # Create Attempt for Manual Approval
+        if giveaway.requirement_type == 'manual_approval':
+            GiveawayAttempt.objects.create(
+                user=user,
+                giveaway=giveaway,
+                status='pending',
+                user_proof=proof
+            )
+            
+            # Clear cache
+            cache.delete(cache_key)
+            
+            send_telegram_message(bot.token, chat_id, "Proof received! An admin will verify shortly.")
