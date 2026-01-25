@@ -6,7 +6,9 @@ A Django-based engine to run multiple Telegram giveaway campaigns (bots) from a 
 - Manage multiple bots
 - Standard giveaways (same link for everyone)
 - Unique giveaways (one unique code per user)
-- Manual approval workflow
+- Optional Manual approval workflow
+- Message Template
+- Giveaway Question
 - Broadcasting news
 
 ## Installation

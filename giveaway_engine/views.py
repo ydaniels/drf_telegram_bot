@@ -85,6 +85,7 @@ class TelegramWebhookView(APIView):
     def handle_start(self, bot, chat_id, name):
         # Fetch Active Giveaways
         giveaways = Giveaway.objects.filter(bot=bot, is_active=True)
+        logger.info(f"Bot {bot.username} handling /start for user {name}. Found {giveaways.count()} active giveaways.")
         
         # Fetch Latest News
         news = NewsUpdate.objects.filter(bot=bot).order_by('-sent_at').first()
@@ -103,8 +104,9 @@ class TelegramWebhookView(APIView):
                     msg += " (Instant)"
                 elif g.requirement_type == 'manual_approval':
                     msg += " (Requires Proof)"
-                msg += f" - Reply {g.id}\n\n"
+                msg += f" - Reply {g.sequence}\n\n"
         else:
+            logger.warning(f"No active giveaways found for bot {bot.username}")
             msg += "No active giveaways at the moment."
             
         send_telegram_message(bot.token, chat_id, msg)
@@ -112,14 +114,37 @@ class TelegramWebhookView(APIView):
     def handle_claim(self, bot, user, chat_id, text):
         try:
             if text.startswith('/claim_'):
-                giveaway_id = int(text.split('_')[1])
+                giveaway_seq = int(text.split('_')[1])
             else:
-                giveaway_id = int(text)
+                giveaway_seq = int(text)
             
-            giveaway = Giveaway.objects.get(id=giveaway_id, bot=bot, is_active=True)
+            giveaway = Giveaway.objects.get(sequence=giveaway_seq, bot=bot, is_active=True)
         except (IndexError, ValueError, Giveaway.DoesNotExist):
             send_telegram_message(bot.token, chat_id, "Giveaway not found or inactive.")
             return
+
+        # Prerequisite check
+        if giveaway.pre_giveaway:
+            # Must have approved attempts for all active giveaways with sequence <= giveaway.pre_giveaway
+            prereqs = Giveaway.objects.filter(bot=bot, is_active=True, sequence__lte=giveaway.pre_giveaway)
+            missing_titles = []
+            missing_sequences = []
+            
+            for pr in prereqs:
+                if not GiveawayAttempt.objects.filter(user=user, giveaway=pr, status='approved').exists():
+                    missing_titles.append(f"[{pr.title}]")
+                    missing_sequences.append(str(pr.sequence))
+            
+            if missing_sequences:
+                if giveaway.failure_message:
+                    msg = giveaway.failure_message
+                else:
+                    seq_str = " and ".join([", ".join(missing_sequences[:-1]), missing_sequences[-1]] if len(missing_sequences) > 1 else missing_sequences)
+                    msg = f"⚠️ Please start with {seq_str} first!"
+                
+                send_telegram_message(bot.token, chat_id, msg)
+                return
+
 
         # Check Questionnaire Requirement
         if giveaway.requirement_type == 'questionnaire':
@@ -286,7 +311,7 @@ class TelegramWebhookView(APIView):
                          answer=message['text']
                      )
                      # Loop back to check for next question
-                     self.handle_claim(bot, user, chat_id, str(giveaway.id))
+                     self.handle_claim(bot, user, chat_id, str(giveaway.sequence))
                      return 
                  except Questionnaire.DoesNotExist:
                      pass

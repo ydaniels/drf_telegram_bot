@@ -9,19 +9,26 @@ class TelegramBot(models.Model):
     
     description = models.TextField(blank=True, null=True, help_text="what the bot can do")
     short_description = models.TextField(blank=True, null=True, help_text="shown in chat info/preview")
+    webhook_domain = models.URLField(blank=True, null=True, help_text="Base URL for webhook (e.g. https://domain.com)")
     
     def __str__(self):
         return self.username
 
     def save(self, *args, **kwargs):
+        # Strip trailing spaces from token
+        if self.token:
+            self.token = self.token.strip()
+            
         # We need to import here to avoid circular dependencies with utils
-        from .utils import update_bot_info
+        from .utils import update_bot_info, set_webhook
         
         super().save(*args, **kwargs)
         
         # Check and update Telegram
         try:
            update_bot_info(self)
+           if self.webhook_domain:
+               set_webhook(self)
         except Exception as e:
            # Log error but don't fail the save
            print(f"Failed to update bot info on Telegram: {e}")
@@ -63,6 +70,10 @@ class Giveaway(models.Model):
     title = models.CharField(max_length=200) # e.g. "Free US TikTok Account"
     description = models.TextField()
     
+    sequence = models.PositiveIntegerField(default=1, help_text="Order of display and claim number")
+    pre_giveaway = models.PositiveIntegerField(null=True, blank=True, help_text="Must claim all giveaways with sequence <= this value first")
+    failure_message = models.TextField(blank=True, null=True, help_text="Message sent if prerequisites not met")
+
     giveaway_type = models.CharField(max_length=20, choices=TYPE_CHOICES)
     requirement_type = models.CharField(max_length=20, choices=REQUIREMENT_CHOICES)
     
@@ -74,8 +85,12 @@ class Giveaway(models.Model):
     
     is_active = models.BooleanField(default=True)
 
+    class Meta:
+        unique_together = ('bot', 'sequence')
+        ordering = ['sequence']
+
     def __str__(self):
-        return self.title
+        return f"[{self.sequence}] {self.title}"
 
 class Questionnaire(models.Model):
     """A question to be asked in a giveaway"""

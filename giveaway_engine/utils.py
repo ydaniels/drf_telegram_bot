@@ -1,5 +1,6 @@
 import requests
 import logging
+from django.urls import reverse
 
 logger = logging.getLogger(__name__)
 
@@ -68,3 +69,26 @@ def update_bot_info(bot_instance):
         if db_short.strip() != current_short.strip():
              call_tg("setMyShortDescription", {"short_description": db_short})
              logger.info(f"Updated Bot Short Description")
+
+def set_webhook(bot_instance):
+    """
+    Registers the webhook URL with Telegram based on the bot's webhook_domain.
+    """
+    domain = bot_instance.webhook_domain.rstrip('/')
+    webhook_path = reverse('telegram_webhook', kwargs={'token': bot_instance.token})
+    webhook_url = f"{domain}{webhook_path}"
+    
+    url = f"https://api.telegram.org/bot{bot_instance.token}/setWebhook"
+    payload = {"url": webhook_url}
+    
+    try:
+        resp = requests.post(url, json=payload, timeout=10)
+        result = resp.json()
+        if result.get("ok"):
+            logger.info(f"Successfully set webhook for {bot_instance.username}: {webhook_url}")
+        else:
+            logger.error(f"Failed to set webhook for {bot_instance.username}: {result.get('description')}")
+        return result
+    except Exception as e:
+        logger.error(f"Error setting webhook: {e}")
+        return {"ok": False}
