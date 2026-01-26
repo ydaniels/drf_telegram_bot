@@ -99,12 +99,7 @@ class TelegramWebhookView(APIView):
         if giveaways.exists():
             msg += "🎁 Active Giveaways:\n\n"
             for g in giveaways:
-                msg += f"{g.title}"
-                if g.giveaway_type == 'standard':
-                    msg += " (Instant)"
-                elif g.requirement_type == 'manual_approval':
-                    msg += " (Requires Proof)"
-                msg += f" - Reply {g.sequence}\n\n"
+                msg += f"{g.title} - Reply {g.sequence}\n\n"
         else:
             logger.warning(f"No active giveaways found for bot {bot.username}")
             msg += "No active giveaways at the moment."
