@@ -27,7 +27,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='giveaway',
             name='sequence',
-            field=models.PositiveIntegerField(default=1, help_text='Order of display and claim number'),
+            field=models.PositiveIntegerField(blank=True, help_text='Order of display and claim number', null=True),
         ),
         migrations.AlterUniqueTogether(
             name='giveaway',

@@ -83,8 +83,8 @@ class TelegramWebhookView(APIView):
         return Response(status=status.HTTP_200_OK)
 
     def handle_start(self, bot, chat_id, name):
-        # Fetch Active Giveaways
-        giveaways = Giveaway.objects.filter(bot=bot, is_active=True)
+        # Fetch Active Giveaways with a sequence
+        giveaways = Giveaway.objects.filter(bot=bot, is_active=True, sequence__isnull=False)
         logger.info(f"Bot {bot.username} handling /start for user {name}. Found {giveaways.count()} active giveaways.")
         
         # Fetch Latest News

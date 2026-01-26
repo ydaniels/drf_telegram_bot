@@ -70,7 +70,7 @@ class Giveaway(models.Model):
     title = models.CharField(max_length=200) # e.g. "Free US TikTok Account"
     description = models.TextField()
     
-    sequence = models.PositiveIntegerField(default=1, help_text="Order of display and claim number")
+    sequence = models.PositiveIntegerField(null=True, blank=True, help_text="Order of display and claim number")
     pre_giveaway = models.PositiveIntegerField(null=True, blank=True, help_text="Must claim all giveaways with sequence <= this value first")
     failure_message = models.TextField(blank=True, null=True, help_text="Message sent if prerequisites not met")
 
