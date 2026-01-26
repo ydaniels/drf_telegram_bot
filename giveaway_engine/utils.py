@@ -92,3 +92,66 @@ def set_webhook(bot_instance):
     except Exception as e:
         logger.error(f"Error setting webhook: {e}")
         return {"ok": False}
+
+def process_follow_up(attempt_id):
+    """
+    Checks if an attempt needs a follow-up and sends it.
+    Can be called by Celery, a thread, or a cron job.
+    """
+    from .models import GiveawayAttempt
+    try:
+        attempt = GiveawayAttempt.objects.get(id=attempt_id)
+        
+        # Security/State Checks
+        if attempt.status != 'approved':
+            return False
+            
+        if attempt.follow_up_sent:
+            return False
+            
+        if not attempt.giveaway.follow_up_text:
+            return False
+
+        # Send the message
+        success = send_telegram_message(
+            attempt.giveaway.bot.token,
+            attempt.user.chat_id,
+            attempt.giveaway.follow_up_text
+        )
+
+        if success:
+            attempt.follow_up_sent = True
+            attempt.save()
+            logger.info(f"Follow-up sent for attempt {attempt_id}")
+            return True
+            
+    except GiveawayAttempt.DoesNotExist:
+        logger.error(f"Attempt {attempt_id} not found for follow-up")
+    except Exception as e:
+        logger.error(f"Error processing follow-up for {attempt_id}: {e}")
+    
+    return False
+
+def process_all_pending_follow_ups():
+    """
+    Finds and processes all giveaway attempts that need a follow-up.
+    Useful for task queues or cron jobs.
+    """
+    from .models import GiveawayAttempt
+    from django.utils import timezone
+    from datetime import timedelta
+    
+    pending = GiveawayAttempt.objects.filter(
+        status='approved',
+        follow_up_sent=False,
+        giveaway__follow_up_text__isnull=False
+    ).exclude(giveaway__follow_up_text='')
+
+    count = 0
+    for attempt in pending:
+        # Security safety: wait at least 5 seconds since creation
+        if timezone.now() > attempt.created_at + timedelta(seconds=5):
+            if process_follow_up(attempt.id):
+                count += 1
+    return count
+
