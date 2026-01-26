@@ -93,7 +93,7 @@ class QuestionnaireInline(admin.TabularInline):
 @admin.register(Giveaway)
 class GiveawayAdmin(admin.ModelAdmin):
     inlines = [QuestionnaireInline]
-    list_display = ('sequence', 'title', 'bot', 'giveaway_type', 'requirement_type', 'failure_template', 'is_active')
+    list_display = ('sequence', 'title', 'bot', 'giveaway_type', 'requirement_type', 'failure_template', 'prompt_template', 'success_template', 'is_active')
     list_display_links = ('title',)
     list_editable = ('sequence', 'is_active')
     list_filter = ('bot', 'giveaway_type', 'requirement_type')

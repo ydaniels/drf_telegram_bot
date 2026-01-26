@@ -32,6 +32,7 @@ class TelegramWebhookView(APIView):
         username = user_data.get('username')
         first_name = user_data.get('first_name')
         text = message.get('text', '').strip()
+        parts = text.split()
         photo = message.get('photo')
 
         contact = message.get('contact')
@@ -68,8 +69,8 @@ class TelegramWebhookView(APIView):
         if text == '/start':
             self.handle_start(bot, chat_id, first_name)
             
-        # Commands like /claim_123 OR just 123
-        elif text.startswith('/claim_') or text.isdigit():
+        # Commands like /claim_123 OR just 123 OR 123 something
+        elif text.startswith('/claim_') or (parts and parts[0].isdigit()):
             self.handle_claim(bot, user, chat_id, text)
             
         # Scenario C (Part 2): Receiving Proof (Photo or Text)
@@ -81,6 +82,20 @@ class TelegramWebhookView(APIView):
             pass
 
         return Response(status=status.HTTP_200_OK)
+
+    def find_target_giveaway(self, bot, user):
+        """
+        Identify the next logical giveaway (by sequence) that the user hasn't successfully completed.
+        """
+        active_giveaways = Giveaway.objects.filter(bot=bot, is_active=True).order_by('sequence')
+        for g in active_giveaways:
+            # Check if already has approved/pending attempt
+            if GiveawayAttempt.objects.filter(user=user, giveaway=g, status__in=['approved', 'pending']).exists():
+                continue
+            
+            # This is the next logical target (prereqs will be checked by handle_claim/handle_proof)
+            return g
+        return None
 
     def handle_start(self, bot, chat_id, name):
         # Fetch Active Giveaways with a sequence
@@ -107,14 +122,22 @@ class TelegramWebhookView(APIView):
         send_telegram_message(bot.token, chat_id, msg)
 
     def handle_claim(self, bot, user, chat_id, text):
-        try:
-            if text.startswith('/claim_'):
+        parts = text.split()
+        giveaway_seq = None
+        user_proof = ""
+
+        if text.startswith('/claim_'):
+            try:
                 giveaway_seq = int(text.split('_')[1])
-            else:
-                giveaway_seq = int(text)
-            
+            except (IndexError, ValueError):
+                pass
+        elif parts and parts[0].isdigit():
+            giveaway_seq = int(parts[0])
+            user_proof = " ".join(parts[1:]).strip()
+
+        try:
             giveaway = Giveaway.objects.get(sequence=giveaway_seq, bot=bot, is_active=True)
-        except (IndexError, ValueError, Giveaway.DoesNotExist):
+        except (Giveaway.DoesNotExist):
             send_telegram_message(bot.token, chat_id, "Giveaway not found or inactive.")
             return
 
@@ -139,6 +162,34 @@ class TelegramWebhookView(APIView):
                     seq_str = " and ".join([", ".join(missing_sequences[:-1]), missing_sequences[-1]] if len(missing_sequences) > 1 else missing_sequences)
                     msg = f"⚠️ Please start with {seq_str} first!"
                 
+                send_telegram_message(bot.token, chat_id, msg)
+                return
+
+        # Handle Manual Approval Flow
+        if giveaway.requirement_type == 'manual_approval':
+            if not user_proof:
+                # Store intent
+                cache_key = f"claim_intent_{chat_id}"
+                cache.set(cache_key, giveaway.id, timeout=600)
+                
+                if giveaway.prompt_template:
+                    msg = giveaway.prompt_template.content.format(name=user.first_name or "Friend")
+                else:
+                    msg = "Please send your proof (screenshot/text) now."
+                send_telegram_message(bot.token, chat_id, msg)
+                return
+            else:
+                # Process proof
+                GiveawayAttempt.objects.create(
+                    user=user,
+                    giveaway=giveaway,
+                    status='pending',
+                    user_proof=user_proof
+                )
+                if giveaway.success_template:
+                    msg = giveaway.success_template.content.format(name=user.first_name or "Friend")
+                else:
+                    msg = "Proof received! An admin will verify shortly."
                 send_telegram_message(bot.token, chat_id, msg)
                 return
 
@@ -284,15 +335,44 @@ class TelegramWebhookView(APIView):
         cache_key = f"claim_intent_{chat_id}"
         giveaway_id = cache.get(cache_key)
         
-        if not giveaway_id:
+        giveaway = None
+        if giveaway_id:
+            try:
+                giveaway = Giveaway.objects.get(id=giveaway_id)
+            except Giveaway.DoesNotExist:
+                pass
+        
+        if not giveaway:
+            # Auto-detect target for "loose" proof
+            giveaway = self.find_target_giveaway(bot, user)
+            
+        if not giveaway:
+             # Could not find a target for floating proof
+             send_telegram_message(bot.token, chat_id, "We've received your message, but it doesn't seem to be for a specific giveaway.")
+             return
+
+        # Prerequisite check (Crucial for auto-detection safety)
+        if giveaway.pre_giveaway:
+            prereqs = Giveaway.objects.filter(bot=bot, is_active=True, sequence__lte=giveaway.pre_giveaway)
+            missing = []
+            for pr in prereqs:
+                if not GiveawayAttempt.objects.filter(user=user, giveaway=pr, status='approved').exists():
+                    missing.append(str(pr.sequence))
+            
+            if missing:
+                if giveaway.failure_template:
+                    msg = giveaway.failure_template.content.format(name=user.first_name or "Friend")
+                else:
+                    seq_str = " and ".join([", ".join(missing[:-1]), missing[-1]] if len(missing) > 1 else missing)
+                    msg = f"⚠️ Please start with {seq_str} first!"
+                send_telegram_message(bot.token, chat_id, msg)
+                return
+
+        # Verify this giveaway actually accepts this kind of input
+        if giveaway.requirement_type != 'manual_approval' and giveaway.requirement_type != 'questionnaire':
+             send_telegram_message(bot.token, chat_id, f"⚠️ Giveaway '{giveaway.title}' requires a different claim method ({giveaway.requirement_type}).")
              return
             
-        # Get the giveaway
-        try:
-            giveaway = Giveaway.objects.get(id=giveaway_id)
-        except Giveaway.DoesNotExist:
-            return 
-
         # QUESTIONNAIRE LOGIC
         if giveaway.requirement_type == 'questionnaire':
              # We are expecting an answer
@@ -333,4 +413,8 @@ class TelegramWebhookView(APIView):
             # Clear cache
             cache.delete(cache_key)
             
-            send_telegram_message(bot.token, chat_id, "Proof received! An admin will verify shortly.")
+            if giveaway.success_template:
+                msg = giveaway.success_template.content.format(name=user.first_name or "Friend")
+            else:
+                msg = "Proof received! An admin will verify shortly."
+            send_telegram_message(bot.token, chat_id, msg)
