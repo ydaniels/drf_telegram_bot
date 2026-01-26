@@ -72,7 +72,7 @@ class Giveaway(models.Model):
     
     sequence = models.PositiveIntegerField(null=True, blank=True, help_text="Order of display and claim number")
     pre_giveaway = models.PositiveIntegerField(null=True, blank=True, help_text="Must claim all giveaways with sequence <= this value first")
-    failure_message = models.TextField(blank=True, null=True, help_text="Message sent if prerequisites not met")
+    failure_template = models.ForeignKey(MessageTemplate, blank=True, null=True, on_delete=models.SET_NULL, related_name='failure_tags', help_text="Template used when prerequisites not met")
 
     giveaway_type = models.CharField(max_length=20, choices=TYPE_CHOICES)
     requirement_type = models.CharField(max_length=20, choices=REQUIREMENT_CHOICES)

@@ -131,8 +131,10 @@ class TelegramWebhookView(APIView):
                     missing_sequences.append(str(pr.sequence))
             
             if missing_sequences:
-                if giveaway.failure_message:
-                    msg = giveaway.failure_message
+                if giveaway.failure_template:
+                    msg = giveaway.failure_template.content.format(
+                        name=user.first_name or "Friend"
+                    )
                 else:
                     seq_str = " and ".join([", ".join(missing_sequences[:-1]), missing_sequences[-1]] if len(missing_sequences) > 1 else missing_sequences)
                     msg = f"⚠️ Please start with {seq_str} first!"
