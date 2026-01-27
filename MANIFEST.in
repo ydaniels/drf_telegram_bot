@@ -1,0 +1,3 @@
+recursive-include giveaway_engine/templates *
+recursive-include giveaway_engine/static *
+include README.md
