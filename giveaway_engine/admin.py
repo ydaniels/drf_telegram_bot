@@ -166,7 +166,7 @@ class TelegramUserAdmin(admin.ModelAdmin):
                 return HttpResponseRedirect(reverse('admin:giveaway_engine_telegramuser_change', args=[queryset.first().id]))
             return HttpResponseRedirect(reverse('admin:giveaway_engine_telegramuser_changelist'))
 
-        return render(request, 'admin/send_message_form.html', context={'users': queryset})
+        return render(request, 'giveaway_engine/admin/send_message_form.html', context={'users': queryset})
 
 class QuestionnaireInline(admin.TabularInline):
     model = Questionnaire
