@@ -76,7 +76,7 @@ class TelegramWebhookView(APIView):
         
         # Scenario A: /start
         if text == '/start':
-            self.handle_start(bot, chat_id, first_name)
+            self.handle_start(bot, user, chat_id, first_name)
             
         # Commands like /claim_123 OR just 123 OR 123 something
         elif text.startswith('/claim_') or (parts and parts[0].isdigit()):
@@ -106,7 +106,7 @@ class TelegramWebhookView(APIView):
             return g
         return None
 
-    def handle_start(self, bot, chat_id, name):
+    def handle_start(self, bot, user, chat_id, name):
         # Fetch Active Giveaways with a sequence
         giveaways = Giveaway.objects.filter(bot=bot, is_active=True, sequence__isnull=False)
         logger.info(f"Bot {bot.username} handling /start for user {name}. Found {giveaways.count()} active giveaways.")
