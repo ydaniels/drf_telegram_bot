@@ -1,0 +1,30 @@
+{% extends "admin/base_site.html" %}
+{% load i18n admin_urls static admin_modify %}
+
+{% block content %}
+<div id="content-main">
+    <p>Please enter the message you want to send to the following users:</p>
+    <ul>
+        {% for user in users %}
+            <li><strong>{{ user.username|default:user.first_name }}</strong> (Bot: {{ user.bot.username }})</li>
+        {% endfor %}
+    </ul>
+
+    <form method="post">
+        {% csrf_token %}
+        <div>
+            <textarea name="message_text" rows="10" cols="80" placeholder="Type your message here..." required style="width: 100%; padding: 10px; margin-bottom: 20px;"></textarea>
+        </div>
+        
+        <div>
+            {% for user in users %}
+            <input type="hidden" name="_selected_action" value="{{ user.pk }}">
+            {% endfor %}
+            <input type="hidden" name="action" value="send_bulk_message_action">
+            <input type="hidden" name="apply" value="yes">
+            <input type="submit" value="Send Message Now" class="default" style="background: #417690; color: white; padding: 10px 20px; border: none; cursor: pointer;">
+            <a href="{% url 'admin:giveaway_engine_telegramuser_changelist' %}" class="button cancel-link">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

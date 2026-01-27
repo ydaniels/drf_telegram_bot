@@ -53,7 +53,6 @@ class TelegramWebhookView(APIView):
                 user.first_name = first_name
                 user.save()
         
-        # Update Phone if provided
         if contact:
             phone_number = contact.get('phone_number')
             if phone_number:
@@ -63,7 +62,17 @@ class TelegramWebhookView(APIView):
                 # Return immediately after handling contact to avoid double processing
                 return Response(status=status.HTTP_200_OK)
 
-        # 2. Logic Flow
+        # 2. Log Inbound Message
+        if text:
+            from .models import MessageLog
+            MessageLog.objects.create(
+                user=user,
+                bot=bot,
+                content=text,
+                direction='inbound'
+            )
+
+        # 3. Logic Flow
         
         # Scenario A: /start
         if text == '/start':
@@ -119,7 +128,7 @@ class TelegramWebhookView(APIView):
             logger.warning(f"No active giveaways found for bot {bot.username}")
             msg += "No active giveaways at the moment."
             
-        send_telegram_message(bot.token, chat_id, msg)
+        send_telegram_message(bot.token, chat_id, msg, bot=bot, user=user)
 
     def handle_claim(self, bot, user, chat_id, text):
         parts = text.split()
@@ -138,7 +147,7 @@ class TelegramWebhookView(APIView):
         try:
             giveaway = Giveaway.objects.get(sequence=giveaway_seq, bot=bot, is_active=True)
         except (Giveaway.DoesNotExist):
-            send_telegram_message(bot.token, chat_id, "Giveaway not found or inactive.")
+            send_telegram_message(bot.token, chat_id, "Giveaway not found or inactive.", bot=bot, user=user)
             return
 
         # Prerequisite check
@@ -162,7 +171,7 @@ class TelegramWebhookView(APIView):
                     seq_str = " and ".join([", ".join(missing_sequences[:-1]), missing_sequences[-1]] if len(missing_sequences) > 1 else missing_sequences)
                     msg = f"⚠️ Please start with {seq_str} first!"
                 
-                send_telegram_message(bot.token, chat_id, msg)
+                send_telegram_message(bot.token, chat_id, msg, bot=bot, user=user)
                 return
 
         # Handle Manual Approval Flow
@@ -176,7 +185,7 @@ class TelegramWebhookView(APIView):
                     msg = giveaway.prompt_template.content.format(name=user.first_name or "Friend")
                 else:
                     msg = "Please send your proof (screenshot/text) now."
-                send_telegram_message(bot.token, chat_id, msg)
+                send_telegram_message(bot.token, chat_id, msg, bot=bot, user=user)
                 return
             else:
                 # Process proof
@@ -190,7 +199,7 @@ class TelegramWebhookView(APIView):
                     msg = giveaway.success_template.content.format(name=user.first_name or "Friend")
                 else:
                     msg = "Proof received! An admin will verify shortly."
-                send_telegram_message(bot.token, chat_id, msg)
+                send_telegram_message(bot.token, chat_id, msg, bot=bot, user=user)
                 return
 
 
@@ -226,7 +235,7 @@ class TelegramWebhookView(APIView):
                  # Also store which question we are asking
                  cache.set(f"current_q_{chat_id}", next_q.id, timeout=3600)
                  
-                 send_telegram_message(bot.token, chat_id, f"📝 Question: {next_q.text}")
+                 send_telegram_message(bot.token, chat_id, f"📝 Question: {next_q.text}", bot=bot, user=user)
                  return
              else:
                  # All answered
@@ -253,7 +262,9 @@ class TelegramWebhookView(APIView):
                     bot.token, 
                     chat_id, 
                     f"⚠️ This giveaway requires a mobile number to minimize spam.\nPlease tap the button below to verify your number.",
-                    reply_markup=keyboard
+                    reply_markup=keyboard,
+                    bot=bot,
+                    user=user
                 )
                 return
             # If phone exists, proceed to fulfillment (Scenario B logic mostly)
@@ -264,7 +275,7 @@ class TelegramWebhookView(APIView):
     def fulfill_giveaway(self, bot, user, chat_id, giveaway):
         # Scenario B (Standard + None/Phone/Questionnaire)
         if giveaway.giveaway_type == 'standard':
-             send_telegram_message(bot.token, chat_id, giveaway.static_content)
+             send_telegram_message(bot.token, chat_id, giveaway.static_content, bot=bot, user=user)
              GiveawayAttempt.objects.create(
                 user=user,
                 giveaway=giveaway,
@@ -277,7 +288,7 @@ class TelegramWebhookView(APIView):
             cache_key = f"claim_intent_{chat_id}"
             cache.set(cache_key, giveaway.id, timeout=600)
             
-            send_telegram_message(bot.token, chat_id, "Please send your proof (screenshot/text) now.")
+            send_telegram_message(bot.token, chat_id, "Please send your proof (screenshot/text) now.", bot=bot, user=user)
             
         # Unique + Automated (Phone or Questionnaire or None)
         elif giveaway.giveaway_type == 'unique':
@@ -299,7 +310,7 @@ class TelegramWebhookView(APIView):
                         except:
                             pass
 
-                    send_telegram_message(bot.token, chat_id, msg)
+                    send_telegram_message(bot.token, chat_id, msg, bot=bot, user=user)
                     
                     GiveawayAttempt.objects.create(
                         user=user,
@@ -307,15 +318,15 @@ class TelegramWebhookView(APIView):
                         status='approved'
                     )
                  else:
-                     send_telegram_message(bot.token, chat_id, "⚠️ Sorry, we are out of stock right now!")
+                     send_telegram_message(bot.token, chat_id, "⚠️ Sorry, we are out of stock right now!", bot=bot, user=user)
 
         else:
-            send_telegram_message(bot.token, chat_id, "This giveaway configuration is not fully supported yet.")
+            send_telegram_message(bot.token, chat_id, "This giveaway configuration is not fully supported yet.", bot=bot, user=user)
 
     def handle_contact_update(self, bot, user, chat_id):
         # Remove keyboard
         remove_kb = {"remove_keyboard": True}
-        send_telegram_message(bot.token, chat_id, "✅ Phone Number Verified!", reply_markup=remove_kb)
+        send_telegram_message(bot.token, chat_id, "✅ Phone Number Verified!", reply_markup=remove_kb, bot=bot, user=user)
         
         # Check for pending claim
         cache_key = f"claim_intent_{chat_id}"
@@ -348,7 +359,7 @@ class TelegramWebhookView(APIView):
             
         if not giveaway:
              # Could not find a target for floating proof
-             send_telegram_message(bot.token, chat_id, "We've received your message, but it doesn't seem to be for a specific giveaway.")
+             send_telegram_message(bot.token, chat_id, "We've received your message, but it doesn't seem to be for a specific giveaway.", bot=bot, user=user)
              return
 
         # Prerequisite check (Crucial for auto-detection safety)
@@ -365,12 +376,12 @@ class TelegramWebhookView(APIView):
                 else:
                     seq_str = " and ".join([", ".join(missing[:-1]), missing[-1]] if len(missing) > 1 else missing)
                     msg = f"⚠️ Please start with {seq_str} first!"
-                send_telegram_message(bot.token, chat_id, msg)
+                send_telegram_message(bot.token, chat_id, msg, bot=bot, user=user)
                 return
 
         # Verify this giveaway actually accepts this kind of input
         if giveaway.requirement_type != 'manual_approval' and giveaway.requirement_type != 'questionnaire':
-             send_telegram_message(bot.token, chat_id, f"⚠️ Giveaway '{giveaway.title}' requires a different claim method ({giveaway.requirement_type}).")
+             send_telegram_message(bot.token, chat_id, f"⚠️ Giveaway '{giveaway.title}' requires a different claim method ({giveaway.requirement_type}).", bot=bot, user=user)
              return
             
         # QUESTIONNAIRE LOGIC
@@ -417,4 +428,4 @@ class TelegramWebhookView(APIView):
                 msg = giveaway.success_template.content.format(name=user.first_name or "Friend")
             else:
                 msg = "Proof received! An admin will verify shortly."
-            send_telegram_message(bot.token, chat_id, msg)
+            send_telegram_message(bot.token, chat_id, msg, bot=bot, user=user)

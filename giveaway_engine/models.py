@@ -158,3 +158,22 @@ class NewsUpdate(models.Model):
 
     def __str__(self):
         return self.title
+
+class MessageLog(models.Model):
+    """Logs all bot-user communication"""
+    DIRECTION_CHOICES = (
+        ('inbound', 'Inbound (User -> Bot)'),
+        ('outbound', 'Outbound (Bot -> User)'),
+    )
+
+    user = models.ForeignKey(TelegramUser, on_delete=models.CASCADE, related_name='logs')
+    bot = models.ForeignKey(TelegramBot, on_delete=models.CASCADE)
+    content = models.TextField()
+    direction = models.CharField(max_length=10, choices=DIRECTION_CHOICES)
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-timestamp']
+
+    def __str__(self):
+        return f"{self.direction} - {self.user} - {self.timestamp.strftime('%Y-%m-%d %H:%M')}"

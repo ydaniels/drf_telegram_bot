@@ -4,9 +4,9 @@ from django.urls import reverse
 
 logger = logging.getLogger(__name__)
 
-def send_telegram_message(bot_token, chat_id, text, reply_markup=None):
+def send_telegram_message(bot_token, chat_id, text, reply_markup=None, bot=None, user=None):
     """
-    Sends a message to a Telegram user.
+    Sends a message to a Telegram user and logs it if bot/user provided.
     """
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = {
@@ -19,7 +19,18 @@ def send_telegram_message(bot_token, chat_id, text, reply_markup=None):
     try:
         response = requests.post(url, json=payload, timeout=10)
         response.raise_for_status()
-        return response.json()
+        result = response.json()
+        
+        # Log outbound message
+        if bot and user:
+            from .models import MessageLog
+            MessageLog.objects.create(
+                user=user,
+                bot=bot,
+                content=text,
+                direction='outbound'
+            )
+        return result
     except requests.exceptions.RequestException as e:
         logger.error(f"Failed to send Telegram message: {e}")
         return None
@@ -116,7 +127,9 @@ def process_follow_up(attempt_id):
         success = send_telegram_message(
             attempt.giveaway.bot.token,
             attempt.user.chat_id,
-            attempt.giveaway.follow_up_text
+            attempt.giveaway.follow_up_text,
+            bot=attempt.giveaway.bot,
+            user=attempt.user
         )
 
         if success:
