@@ -45,6 +45,11 @@ class TelegramUser(models.Model):
     class Meta:
         unique_together = ('bot', 'chat_id')
 
+    def __str__(self):
+        if self.username:
+            return f"@{self.username}"
+        return f"{self.first_name or 'User'} ({self.chat_id})"
+
 class MessageTemplate(models.Model):
     """Custom response templates for upsells/branding"""
     bot = models.ForeignKey(TelegramBot, on_delete=models.CASCADE)
