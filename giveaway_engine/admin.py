@@ -88,36 +88,60 @@ class GiveawayAttemptAdmin(admin.ModelAdmin):
 
 admin.site.register(TelegramBot)
 
-class MessageLogInline(admin.TabularInline):
-    model = MessageLog
-    extra = 0
-    readonly_fields = ('direction', 'content', 'timestamp')
-    can_delete = False
-    
-    def get_queryset(self, request):
-        return super().get_queryset(request).order_by('-timestamp')[:20]
-
 @admin.register(TelegramUser)
 class TelegramUserAdmin(admin.ModelAdmin):
     list_display = ('username', 'first_name', 'chat_id', 'bot', 'send_message_link')
     list_filter = ('bot',)
     search_fields = ('username', 'first_name', 'chat_id')
-    inlines = [MessageLogInline]
+    readonly_fields = ('recent_history',)
     actions = ['send_bulk_message_action']
+
+    def recent_history(self, obj):
+        from django.utils.html import format_html
+        logs = obj.logs.all().order_by('-timestamp')[:20]
+        if not logs:
+            return "No messages yet."
+        
+        html = '<div style="max-height: 300px; overflow-y: auto;"><table style="width: 100%; text-align: left; border-collapse: collapse;">'
+        html += '<thead><tr><th>Time</th><th>Dir</th><th>Message</th></tr></thead><tbody>'
+        for log in logs:
+            color = "#e1f5fe" if log.direction == 'inbound' else "#fff9c4"
+            html += f'<tr style="background: {color}; border-bottom: 1px solid #eee;">'
+            html += f'<td style="padding: 5px; white-space: nowrap;">{log.timestamp.strftime("%H:%M:%S")}</td>'
+            html += f'<td style="padding: 5px;">{"⬅️" if log.direction == "inbound" else "➡️"}</td>'
+            html += f'<td style="padding: 5px;">{log.content}</td></tr>'
+        html += '</tbody></table></div>'
+        return format_html(html)
+
+    recent_history.short_description = "Last 20 Messages"
 
     def send_message_link(self, obj):
         from django.urls import reverse
         from django.utils.html import format_html
-        url = reverse('admin:giveaway_engine_telegramuser_changelist') + f"?id={obj.id}&action=send_bulk_message_action"
+        url = reverse('admin:send-message', args=[obj.id])
         return format_html('<a class="button" href="{}">Send Message</a>', url)
     
     send_message_link.short_description = "Messaging"
+
+    def get_urls(self):
+        from django.urls import path
+        urls = super().get_urls()
+        custom_urls = [
+            path('<int:user_id>/send-message/', self.admin_site.admin_view(self.single_message_view), name='send-message'),
+        ]
+        return custom_urls + urls
+
+    def single_message_view(self, request, user_id):
+        from django.shortcuts import get_object_or_404
+        queryset = TelegramUser.objects.filter(id=user_id)
+        return self.send_bulk_message_action(request, queryset)
 
     @admin.action(description="Send bulk message to selected users")
     def send_bulk_message_action(self, request, queryset):
         # We'll use a session-based approach to store IDs and redirect to a form
         from django.shortcuts import render, redirect
         from django.http import HttpResponseRedirect
+        from django.urls import reverse
         
         if 'apply' in request.POST:
             msg_text = request.POST.get('message_text')
@@ -138,7 +162,9 @@ class TelegramUserAdmin(admin.ModelAdmin):
                     count += 1
             
             messages.success(request, f"Successfully sent message to {count} users.")
-            return HttpResponseRedirect(request.get_full_path())
+            if queryset.count() == 1:
+                return HttpResponseRedirect(reverse('admin:giveaway_engine_telegramuser_change', args=[queryset.first().id]))
+            return HttpResponseRedirect(reverse('admin:giveaway_engine_telegramuser_changelist'))
 
         return render(request, 'admin/send_message_form.html', context={'users': queryset})
 
