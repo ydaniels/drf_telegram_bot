@@ -6,7 +6,7 @@ from .utils import send_telegram_message
 
 @admin.register(GiveawayAttempt)
 class GiveawayAttemptAdmin(admin.ModelAdmin):
-    list_display = ('user', 'giveaway', 'status', 'created_at')
+    list_display = ('user', 'giveaway', 'status', 'user_proof', 'created_at')
     list_filter = ('status', 'giveaway', 'created_at')
     readonly_fields = ('user', 'giveaway', 'user_proof', 'created_at')
 
