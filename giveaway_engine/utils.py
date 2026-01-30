@@ -32,7 +32,10 @@ def send_telegram_message(bot_token, chat_id, text, reply_markup=None, bot=None,
             )
         return result
     except requests.exceptions.RequestException as e:
-        logger.error(f"Failed to send Telegram message: {e}")
+        error_msg = f"Failed to send Telegram message: {e}"
+        if e.response is not None:
+             error_msg += f" | Body: {e.response.text}"
+        logger.error(error_msg)
         return None
 
 def update_bot_info(bot_instance):

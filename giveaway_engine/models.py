@@ -10,6 +10,7 @@ class TelegramBot(models.Model):
     description = models.TextField(blank=True, null=True, help_text="what the bot can do")
     short_description = models.TextField(blank=True, null=True, help_text="shown in chat info/preview")
     webhook_domain = models.URLField(blank=True, null=True, help_text="Base URL for webhook (e.g. https://domain.com)")
+    start_message_header = models.TextField(default="🎁 Active Giveaways:", help_text="Text displayed above the list of giveaways in the /start message.")
     
     def __str__(self):
         return self.username

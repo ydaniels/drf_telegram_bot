@@ -121,7 +121,7 @@ class TelegramWebhookView(APIView):
             msg += f"📰 Latest News: {news.title}\n{news.body}\n\n"
             
         if giveaways.exists():
-            msg += "🎁 Active Giveaways:\n\n"
+            msg += f"{bot.start_message_header}\n\n"
             for g in giveaways:
                 msg += f"{g.title} - Reply {g.sequence}\n\n"
         else:
