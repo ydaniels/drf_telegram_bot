@@ -91,6 +91,7 @@ class Giveaway(models.Model):
     # Custom Message
     approval_template = models.ForeignKey(MessageTemplate, blank=True, null=True, on_delete=models.SET_NULL)
     follow_up_text = models.TextField(blank=True, null=True, help_text="Sent automatically after fulfillment")
+    follow_up_delay_seconds = models.PositiveIntegerField(default=60, help_text="Seconds to wait after approval before sending the follow-up message.")
     
     is_active = models.BooleanField(default=True)
 

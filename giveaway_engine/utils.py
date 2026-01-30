@@ -165,8 +165,9 @@ def process_all_pending_follow_ups():
 
     count = 0
     for attempt in pending:
-        # Security safety: wait at least 5 seconds since creation
-        if timezone.now() > attempt.created_at + timedelta(seconds=5):
+        # Check if enough time has passed based on the giveaway's specific delay
+        delay_seconds = attempt.giveaway.follow_up_delay_seconds
+        if timezone.now() > attempt.created_at + timedelta(seconds=delay_seconds):
             if process_follow_up(attempt.id):
                 count += 1
     return count
