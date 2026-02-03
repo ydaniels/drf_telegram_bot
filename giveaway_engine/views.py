@@ -55,37 +55,11 @@ class TelegramWebhookView(APIView):
         
                 user.save()
  
-        # Check for Resume Choice State
-        resume_giveaway_id = cache.get(f"waiting_for_resume_choice_{chat_id}")
-        if resume_giveaway_id and text:
-            # Clear state
-            cache.delete(f"waiting_for_resume_choice_{chat_id}")
-            
-            try:
-                giveaway = Giveaway.objects.get(id=resume_giveaway_id)
-                if text.lower() == 'yes':
-                    # Delete answers and restart
-                    from .models import UserAnswer
-                    UserAnswer.objects.filter(user=user, question__giveaway=giveaway).delete()
-                    # Clear any other state
-                    cache.delete(f"current_q_{chat_id}")
-                    # Restart flow
-                    self.handle_claim(bot, user, chat_id, str(giveaway.sequence))
-                else:
-                    # Proceed with existing answers
-                    # Send success message if configured (as per previous logic)
-                    if giveaway.success_template:
-                         try:
-                            msg = giveaway.success_template.content.format(name=user.first_name or "Friend")
-                            send_telegram_message(bot.token, chat_id, msg, bot=bot, user=user)
-                         except Exception as e:
-                            logger.error(f"Error sending success template: {e}")
-                            
-                    self.fulfill_giveaway(bot, user, chat_id, giveaway)
-                
-                return Response(status=status.HTTP_200_OK)
-            except Giveaway.DoesNotExist:
-                pass
+                user.save()
+ 
+        # Check for Resume Choice State -> REMOVED per user request for auto-retake
+        # resume_giveaway_id = cache.get(f"waiting_for_resume_choice_{chat_id}")
+        # if resume_giveaway_id and text: ... (Logic Removed)
                 
         if contact:
             phone_number = contact.get('phone_number')
@@ -205,17 +179,35 @@ class TelegramWebhookView(APIView):
                     seq_str = " and ".join([", ".join(missing_sequences[:-1]), missing_sequences[-1]] if len(missing_sequences) > 1 else missing_sequences)
                     msg = f"⚠️ Please start with {seq_str} first!"
                 
-                send_telegram_message(bot.token, chat_id, msg, bot=bot, user=user)
+                send_telegram_message(bot.token, chat_id, msg, reply_markup={"remove_keyboard": True}, bot=bot, user=user)
                 return
 
         # Check for Retake Logic
         # If user has already claimed (approved/pending), check if retake is allowed.
         if GiveawayAttempt.objects.filter(user=user, giveaway=giveaway, status__in=['approved', 'pending']).exists():
             if not giveaway.allow_retake:
-                send_telegram_message(bot.token, chat_id, "✅ You have already claimed this giveaway.", bot=bot, user=user)
+                send_telegram_message(bot.token, chat_id, "✅ You have already claimed this giveaway.", reply_markup={"remove_keyboard": True}, bot=bot, user=user)
                 return
-            # If allow_retake is True, we proceed. 
-            # The logic below will detect existing answers and Prompt "Update Answers?" logic we added earlier.
+            
+            # If allow_retake is True:
+            # Check for Race Condition vs Genuine Retake
+            is_answering = cache.get(f"user_is_answering_{chat_id}")
+            if not is_answering:
+                 from .models import UserAnswer # Ensure import
+                 last_answer = UserAnswer.objects.filter(user=user, question__giveaway=giveaway).order_by('-answered_at').first()
+                 
+                 from django.utils import timezone
+                 from datetime import timedelta
+                 # If last answer was OLD (> 15s), assume User wants to RETAKE.
+                 # If last answer was NEW (< 15s), assume User just finished usage and this is a race/retry -> Fall through to Fulfill.
+                 if last_answer and (timezone.now() - last_answer.answered_at > timedelta(seconds=15)):
+                     # AUTO RESET for RETAKE
+                     UserAnswer.objects.filter(user=user, question__giveaway=giveaway).delete()
+                     cache.delete(f"current_q_{chat_id}")
+                     cache.delete(f"user_is_answering_{chat_id}")
+                     # Flow continues -> new UserAnswer count = 0 -> Question 1 asked.
+                     # We can explicitly continue or just fall through.
+                     pass
 
         # Handle Manual Approval Flow
         if giveaway.requirement_type == 'manual_approval':
@@ -284,69 +276,15 @@ class TelegramWebhookView(APIView):
                  return
              else:
                  # All answered
-                 # CHECK: Do we have answers already? (Resume Logic)
-                 # We must verify if we just finished answering OR if this is a retake
-                 # If we just answered the last question, current_q might still be set or cleared?
-                 # Actually, handle_claim calls recursively after saving answer.
-                 # So we need to distinguish "Just finished last Q" vs "Started fresh with all Qs answered"
+                 # If we are here, we have ALL answers.
+                 # Because of the Top Logic, if we wanted to Retake, we would have deleted answers already.
+                 # If we still have answers here, it means we either:
+                 # 1. Just finished answering (Race/Normal flow)
+                 # 2. Or allow_retake=False (but caught at top)
                  
-                 # Simplest heuristic: Check if we are in "waiting_for_resume_choice" - handled in post
-                 # Check if we just answered a question (cache might help? or passing a flag? handle_claim signature doesn't support it well)
+                 # Logic: Just Fulfill.
+                 pass
                  
-                 # BETTER APPROACH:
-                 # If we are here, it means NO unanswered questions exist.
-                 # IF we *just* answered a question, `handle_proof` called `handle_claim`.
-                 
-                 # Let's check if the USER initiated this claim command primarily (text starts with /claim or is a number)
-                 # VS coming from handle_proof logic.
-                 # Actually, existing logic:
-                 # handle_proof saves answer -> calls handle_claim.
-                 
-                 # If we want to prompt "Do you want to update?", we should only do it if the user explicit invoked the claim
-                 # AND all answers already existed.
-                 
-                 # But handle_claim is called recursively.
-                 
-                 # Let's add a cached flag "user_is_answering_{chat_id}" that is set when we ask a question.
-                 # If that flag is set, it means we are in the middle of a flow, so don't prompt.
-                 # If that flag is NOT set, and all answers exist, Prompt.
-                 
-                 is_answering = cache.get(f"user_is_answering_{chat_id}")
-                 
-                 # If we are NOT in the middle of answering (flag missing) AND we have answers:
-                 if not is_answering and UserAnswer.objects.filter(user=user, question__giveaway=giveaway).exists():
-                     # **RACE CONDITION FIX**: Check if the last answer was just submitted (e.g. < 10 seconds ago)
-                     last_answer = UserAnswer.objects.filter(user=user, question__giveaway=giveaway).order_by('-answered_at').first()
-                     if last_answer:
-                         from django.utils import timezone
-                         from datetime import timedelta
-                         # If answered less than 10 seconds ago, this is likely a race condition of the final answer request.
-                         # Treat it as 'Just Finished' -> Proceed to success, do NOT prompt.
-                         if timezone.now() - last_answer.answered_at < timedelta(seconds=10):
-                             # Proceed to normal flow below
-                             pass
-                         else:
-                             # Truly old answers, so Prompt.
-                             cache.set(f"waiting_for_resume_choice_{chat_id}", giveaway.id, timeout=600)
-                             
-                             keyboard = {
-                                "keyboard": [[{"text": "Yes"}, {"text": "No"}]],
-                                "one_time_keyboard": True,
-                                "resize_keyboard": True
-                             }
-                             send_telegram_message(
-                                 bot.token, 
-                                 chat_id, 
-                                 "📝 We found previous answers. Do you want to update them?", 
-                                 reply_markup=keyboard,
-                                 bot=bot, 
-                                 user=user
-                             )
-                             return
-                     else:
-                        # Should not happen given exists() check but safe fallback
-                        pass
-
                  # Normal Finish Flow
                  cache.delete(f"user_is_answering_{chat_id}") # Clear flag if exists
                  
@@ -394,7 +332,7 @@ class TelegramWebhookView(APIView):
     def fulfill_giveaway(self, bot, user, chat_id, giveaway):
         # Scenario B (Standard + None/Phone/Questionnaire)
         if giveaway.giveaway_type == 'standard':
-             send_telegram_message(bot.token, chat_id, giveaway.static_content, bot=bot, user=user)
+             send_telegram_message(bot.token, chat_id, giveaway.static_content, reply_markup={"remove_keyboard": True}, bot=bot, user=user)
              GiveawayAttempt.objects.create(
                 user=user,
                 giveaway=giveaway,
@@ -429,7 +367,7 @@ class TelegramWebhookView(APIView):
                         except:
                             pass
 
-                    send_telegram_message(bot.token, chat_id, msg, bot=bot, user=user)
+                    send_telegram_message(bot.token, chat_id, msg, reply_markup={"remove_keyboard": True}, bot=bot, user=user)
                     
                     GiveawayAttempt.objects.create(
                         user=user,
@@ -437,7 +375,7 @@ class TelegramWebhookView(APIView):
                         status='approved'
                     )
                  else:
-                     send_telegram_message(bot.token, chat_id, "⚠️ Sorry, we are out of stock right now!", bot=bot, user=user)
+                     send_telegram_message(bot.token, chat_id, "⚠️ Sorry, we are out of stock right now!", reply_markup={"remove_keyboard": True}, bot=bot, user=user)
 
         else:
             send_telegram_message(bot.token, chat_id, "This giveaway configuration is not fully supported yet.", bot=bot, user=user)
