@@ -239,6 +239,14 @@ class TelegramWebhookView(APIView):
                  return
              else:
                  # All answered
+                 # Check for success template
+                 if giveaway.success_template:
+                     try:
+                        msg = giveaway.success_template.content.format(name=user.first_name or "Friend")
+                        send_telegram_message(bot.token, chat_id, msg, bot=bot, user=user)
+                     except Exception as e:
+                        logger.error(f"Error sending success template: {e}")
+
                  self.fulfill_giveaway(bot, user, chat_id, giveaway)
                  return
 

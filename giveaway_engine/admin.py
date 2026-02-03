@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.contrib import messages
 from django import db
-from .models import TelegramBot, TelegramUser, Giveaway, GiveawayItem, GiveawayAttempt, NewsUpdate, MessageTemplate, Questionnaire, MessageLog
+from .models import TelegramBot, TelegramUser, Giveaway, GiveawayItem, GiveawayAttempt, NewsUpdate, MessageTemplate, Questionnaire, MessageLog, UserAnswer
 from .utils import send_telegram_message
 
 @admin.register(GiveawayAttempt)
@@ -167,6 +167,12 @@ class TelegramUserAdmin(admin.ModelAdmin):
             return HttpResponseRedirect(reverse('admin:giveaway_engine_telegramuser_changelist'))
 
         return render(request, 'giveaway_engine/admin/send_message_form.html', context={'users': queryset})
+
+@admin.register(UserAnswer)
+class UserAnswerAdmin(admin.ModelAdmin):
+    list_display = ('user', 'question', 'answer', 'answered_at')
+    list_filter = ('question__giveaway', 'answered_at')
+    search_fields = ('user__username', 'answer')
 
 class QuestionnaireInline(admin.TabularInline):
     model = Questionnaire
