@@ -93,6 +93,7 @@ class Giveaway(models.Model):
     follow_up_text = models.TextField(blank=True, null=True, help_text="Sent automatically after fulfillment")
     follow_up_delay_seconds = models.PositiveIntegerField(default=60, help_text="Seconds to wait after approval before sending the follow-up message.")
     
+    allow_retake = models.BooleanField(default=False, help_text="If checked, users can retake the questionnaire even if they have already claimed the giveaway.")
     is_active = models.BooleanField(default=True)
 
     class Meta:

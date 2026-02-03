@@ -208,6 +208,15 @@ class TelegramWebhookView(APIView):
                 send_telegram_message(bot.token, chat_id, msg, bot=bot, user=user)
                 return
 
+        # Check for Retake Logic
+        # If user has already claimed (approved/pending), check if retake is allowed.
+        if GiveawayAttempt.objects.filter(user=user, giveaway=giveaway, status__in=['approved', 'pending']).exists():
+            if not giveaway.allow_retake:
+                send_telegram_message(bot.token, chat_id, "✅ You have already claimed this giveaway.", bot=bot, user=user)
+                return
+            # If allow_retake is True, we proceed. 
+            # The logic below will detect existing answers and Prompt "Update Answers?" logic we added earlier.
+
         # Handle Manual Approval Flow
         if giveaway.requirement_type == 'manual_approval':
             if not user_proof:
@@ -306,23 +315,37 @@ class TelegramWebhookView(APIView):
                  
                  # If we are NOT in the middle of answering (flag missing) AND we have answers:
                  if not is_answering and UserAnswer.objects.filter(user=user, question__giveaway=giveaway).exists():
-                     # PROMPT
-                     cache.set(f"waiting_for_resume_choice_{chat_id}", giveaway.id, timeout=600)
-                     
-                     keyboard = {
-                        "keyboard": [[{"text": "Yes"}, {"text": "No"}]],
-                        "one_time_keyboard": True,
-                        "resize_keyboard": True
-                     }
-                     send_telegram_message(
-                         bot.token, 
-                         chat_id, 
-                         "📝 We found previous answers. Do you want to update them?", 
-                         reply_markup=keyboard,
-                         bot=bot, 
-                         user=user
-                     )
-                     return
+                     # **RACE CONDITION FIX**: Check if the last answer was just submitted (e.g. < 10 seconds ago)
+                     last_answer = UserAnswer.objects.filter(user=user, question__giveaway=giveaway).order_by('-answered_at').first()
+                     if last_answer:
+                         from django.utils import timezone
+                         from datetime import timedelta
+                         # If answered less than 10 seconds ago, this is likely a race condition of the final answer request.
+                         # Treat it as 'Just Finished' -> Proceed to success, do NOT prompt.
+                         if timezone.now() - last_answer.answered_at < timedelta(seconds=10):
+                             # Proceed to normal flow below
+                             pass
+                         else:
+                             # Truly old answers, so Prompt.
+                             cache.set(f"waiting_for_resume_choice_{chat_id}", giveaway.id, timeout=600)
+                             
+                             keyboard = {
+                                "keyboard": [[{"text": "Yes"}, {"text": "No"}]],
+                                "one_time_keyboard": True,
+                                "resize_keyboard": True
+                             }
+                             send_telegram_message(
+                                 bot.token, 
+                                 chat_id, 
+                                 "📝 We found previous answers. Do you want to update them?", 
+                                 reply_markup=keyboard,
+                                 bot=bot, 
+                                 user=user
+                             )
+                             return
+                     else:
+                        # Should not happen given exists() check but safe fallback
+                        pass
 
                  # Normal Finish Flow
                  cache.delete(f"user_is_answering_{chat_id}") # Clear flag if exists
