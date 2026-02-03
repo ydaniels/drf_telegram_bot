@@ -53,6 +53,40 @@ class TelegramWebhookView(APIView):
                 user.first_name = first_name
                 user.save()
         
+                user.save()
+ 
+        # Check for Resume Choice State
+        resume_giveaway_id = cache.get(f"waiting_for_resume_choice_{chat_id}")
+        if resume_giveaway_id and text:
+            # Clear state
+            cache.delete(f"waiting_for_resume_choice_{chat_id}")
+            
+            try:
+                giveaway = Giveaway.objects.get(id=resume_giveaway_id)
+                if text.lower() == 'yes':
+                    # Delete answers and restart
+                    from .models import UserAnswer
+                    UserAnswer.objects.filter(user=user, question__giveaway=giveaway).delete()
+                    # Clear any other state
+                    cache.delete(f"current_q_{chat_id}")
+                    # Restart flow
+                    self.handle_claim(bot, user, chat_id, str(giveaway.sequence))
+                else:
+                    # Proceed with existing answers
+                    # Send success message if configured (as per previous logic)
+                    if giveaway.success_template:
+                         try:
+                            msg = giveaway.success_template.content.format(name=user.first_name or "Friend")
+                            send_telegram_message(bot.token, chat_id, msg, bot=bot, user=user)
+                         except Exception as e:
+                            logger.error(f"Error sending success template: {e}")
+                            
+                    self.fulfill_giveaway(bot, user, chat_id, giveaway)
+                
+                return Response(status=status.HTTP_200_OK)
+            except Giveaway.DoesNotExist:
+                pass
+                
         if contact:
             phone_number = contact.get('phone_number')
             if phone_number:
@@ -234,11 +268,65 @@ class TelegramWebhookView(APIView):
                  cache.set(cache_key, giveaway.id, timeout=3600)  # 1 hour to answer
                  # Also store which question we are asking
                  cache.set(f"current_q_{chat_id}", next_q.id, timeout=3600)
+                 # NEW: Set flag that we are actively answering
+                 cache.set(f"user_is_answering_{chat_id}", True, timeout=3600)
                  
                  send_telegram_message(bot.token, chat_id, f"📝 Question: {next_q.text}", bot=bot, user=user)
                  return
              else:
                  # All answered
+                 # CHECK: Do we have answers already? (Resume Logic)
+                 # We must verify if we just finished answering OR if this is a retake
+                 # If we just answered the last question, current_q might still be set or cleared?
+                 # Actually, handle_claim calls recursively after saving answer.
+                 # So we need to distinguish "Just finished last Q" vs "Started fresh with all Qs answered"
+                 
+                 # Simplest heuristic: Check if we are in "waiting_for_resume_choice" - handled in post
+                 # Check if we just answered a question (cache might help? or passing a flag? handle_claim signature doesn't support it well)
+                 
+                 # BETTER APPROACH:
+                 # If we are here, it means NO unanswered questions exist.
+                 # IF we *just* answered a question, `handle_proof` called `handle_claim`.
+                 
+                 # Let's check if the USER initiated this claim command primarily (text starts with /claim or is a number)
+                 # VS coming from handle_proof logic.
+                 # Actually, existing logic:
+                 # handle_proof saves answer -> calls handle_claim.
+                 
+                 # If we want to prompt "Do you want to update?", we should only do it if the user explicit invoked the claim
+                 # AND all answers already existed.
+                 
+                 # But handle_claim is called recursively.
+                 
+                 # Let's add a cached flag "user_is_answering_{chat_id}" that is set when we ask a question.
+                 # If that flag is set, it means we are in the middle of a flow, so don't prompt.
+                 # If that flag is NOT set, and all answers exist, Prompt.
+                 
+                 is_answering = cache.get(f"user_is_answering_{chat_id}")
+                 
+                 # If we are NOT in the middle of answering (flag missing) AND we have answers:
+                 if not is_answering and UserAnswer.objects.filter(user=user, question__giveaway=giveaway).exists():
+                     # PROMPT
+                     cache.set(f"waiting_for_resume_choice_{chat_id}", giveaway.id, timeout=600)
+                     
+                     keyboard = {
+                        "keyboard": [[{"text": "Yes"}, {"text": "No"}]],
+                        "one_time_keyboard": True,
+                        "resize_keyboard": True
+                     }
+                     send_telegram_message(
+                         bot.token, 
+                         chat_id, 
+                         "📝 We found previous answers. Do you want to update them?", 
+                         reply_markup=keyboard,
+                         bot=bot, 
+                         user=user
+                     )
+                     return
+
+                 # Normal Finish Flow
+                 cache.delete(f"user_is_answering_{chat_id}") # Clear flag if exists
+                 
                  # Check for success template
                  if giveaway.success_template:
                      try:
