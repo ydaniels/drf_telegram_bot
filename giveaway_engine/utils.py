@@ -177,7 +177,7 @@ def process_all_pending_follow_ups():
         status='approved',
         follow_up_sent=False,
         giveaway__follow_up_text__isnull=False
-    ).exclude(giveaway__follow_up_text='')
+    ).exclude(giveaway__follow_up_text='').exclude(user__is_blocked=True)
 
     count = 0
     for attempt in pending:
