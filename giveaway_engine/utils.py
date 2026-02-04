@@ -14,6 +14,10 @@ def send_telegram_message(bot_token, chat_id, text, reply_markup=None, bot=None,
         "text": text,
         "parse_mode": "HTML"
     }
+    if user and getattr(user, 'is_blocked', False):
+        logger.info(f"Skipping message to blocked user {user.chat_id}")
+        return None
+
     if reply_markup:
         payload['reply_markup'] = reply_markup
     try:
@@ -31,10 +35,22 @@ def send_telegram_message(bot_token, chat_id, text, reply_markup=None, bot=None,
                 direction='outbound'
             )
         return result
-    except requests.exceptions.RequestException as e:
+    except requests.exceptions.HTTPError as e:
+        # Check for 403 Forbidden (User blocked bot)
+        if e.response.status_code == 403:
+            if user:
+                user.is_blocked = True
+                user.save()
+                logger.warning(f"User {user.chat_id} blocked the bot. marked as blocked.")
+            return None
+            
         error_msg = f"Failed to send Telegram message: {e}"
         if e.response is not None:
              error_msg += f" | Body: {e.response.text}"
+        logger.error(error_msg)
+        return None
+    except requests.exceptions.RequestException as e:
+        error_msg = f"Failed to send Telegram message: {e}"
         logger.error(error_msg)
         return None
 

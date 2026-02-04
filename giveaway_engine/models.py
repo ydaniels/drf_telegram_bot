@@ -41,6 +41,7 @@ class TelegramUser(models.Model):
     username = models.CharField(max_length=100, null=True, blank=True)
     first_name = models.CharField(max_length=100, null=True)
     phone_number = models.CharField(max_length=20, null=True, blank=True)
+    is_blocked = models.BooleanField(default=False)
     joined_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

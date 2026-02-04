@@ -56,6 +56,12 @@ class TelegramWebhookView(APIView):
                 user.save()
  
                 user.save()
+        
+        # Auto-Unblock if user interacts
+        if user.is_blocked:
+            user.is_blocked = False
+            user.save()
+            logger.info(f"User {chat_id} unblocked the bot (detected via inbound message)")
  
         # Check for Resume Choice State -> REMOVED per user request for auto-retake
         # resume_giveaway_id = cache.get(f"waiting_for_resume_choice_{chat_id}")
